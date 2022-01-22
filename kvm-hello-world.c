@@ -108,6 +108,7 @@ void vm_init(struct vm *vm, size_t mem_size)
 
 	vm->mem = mmap(NULL, mem_size, PROT_READ | PROT_WRITE,
 		   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+	printf("location: %p\n", (void*)(vm->mem));
 	if (vm->mem == MAP_FAILED) {
 		perror("mmap mem");
 		exit(1);
@@ -153,13 +154,14 @@ void vcpu_init(struct vm *vm, struct vcpu *vcpu)
 		perror("mmap kvm_run");
 		exit(1);
 	}
+	printf("vcpu location: %p\n", (void*)(vcpu->kvm_run));
 }
 
 int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 {
 	struct kvm_regs regs;
 	uint64_t memval = 0;
-
+	int count=0;
 	for (;;) {
 		if (ioctl(vcpu->fd, KVM_RUN, 0) < 0) {
 			perror("KVM_RUN");
@@ -168,10 +170,13 @@ int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 
 		switch (vcpu->kvm_run->exit_reason) {
 		case KVM_EXIT_HLT:
+			count++;
+			printf("exits count: %d\n", count);
 			printf("vmexit hlt\n");
 			goto check;
 
 		case KVM_EXIT_IO:
+			count++;
 			if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT
 			    && vcpu->kvm_run->io.port == 0xE9) {
 				char *p = (char *)vcpu->kvm_run;
@@ -183,6 +188,7 @@ int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 
 			/* fall through */
 		default:
+			count++;
 			fprintf(stderr,	"Got exit_reason %d,"
 				" expected KVM_EXIT_HLT (%d)\n",
 				vcpu->kvm_run->exit_reason, KVM_EXIT_HLT);
@@ -394,7 +400,8 @@ static void setup_long_mode(struct vm *vm, struct kvm_sregs *sregs)
 	pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr;
 	pdpt[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
 	pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
-
+	printf("PD len: %d\n", PDE64_PS);
+	
 	sregs->cr3 = pml4_addr;
 	sregs->cr4 = CR4_PAE;
 	sregs->cr0
@@ -435,6 +442,7 @@ int run_long_mode(struct vm *vm, struct vcpu *vcpu)
 		exit(1);
 	}
 
+	printf("guest64 location: %p\nlength: %ld\n", (void*)(vm->mem), guest64_end-guest64);
 	memcpy(vm->mem, guest64, guest64_end-guest64);
 	return run_vm(vm, vcpu, 8);
 }
