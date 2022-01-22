@@ -33,12 +33,13 @@ void
 __attribute__((noreturn))
 __attribute__((section(".start")))
 _start(void) {
-	char *s = "Hello, world!\n";
-	char *buff = "Exits diff is: -\n";
 	int before = exits();
+	char *s = "Hello, world!\n";
 	print(s);
 	int after = exits();
+	
 	int diff = after-before;
+	char *buff = "Exits diff is: -\n";
 	buff[15] = '0'+diff-1; // minus exits's exit
 	print(buff);
 
