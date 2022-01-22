@@ -211,8 +211,8 @@ int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 			if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_IN
 			    && vcpu->kvm_run->io.port == 0xBB) {
 				printf("###### exits, count value is: %d\n", count);
-				char *value = (char *)vcpu->kvm_run + vcpu->kvm_run->io.data_offset;
-				*value = (char)(count);
+				char* addr = (char *)vcpu->kvm_run;
+				memcpy(&addr[vcpu->kvm_run->io.data_offset], &count, sizeof(count));
 				continue;
 			}
 
