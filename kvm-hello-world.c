@@ -8,6 +8,9 @@
 #include <string.h>
 #include <stdint.h>
 #include <linux/kvm.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+
 
 /* CR0 bits */
 #define CR0_PE 1u
@@ -159,11 +162,138 @@ void vcpu_init(struct vm *vm, struct vcpu *vcpu)
 	// printf("vcpu location: %p\n", (void*)(vcpu->kvm_run));
 }
 
+void print_char(struct vcpu *vcpu) {
+	char *p = (char *)vcpu->kvm_run;
+	printf("###### start output:\n");
+	fwrite(p + vcpu->kvm_run->io.data_offset,
+	       vcpu->kvm_run->io.size, 1, stdout);
+	fflush(stdout);
+	printf("###### end ouput\n");
+}
+
+void exits(struct vcpu *vcpu, uint32_t *count) {
+	printf("###### exits, count value is: %d\n", *count);
+	char* addr = (char *)vcpu->kvm_run;
+	memcpy(&addr[vcpu->kvm_run->io.data_offset], count, sizeof(*count));
+}
+
+char * _io_string(struct vm *vm, struct vcpu *vcpu, size_t sz) {
+	char* addr = (char *)vcpu->kvm_run;
+	uint64_t offset=0;
+	memcpy(&offset, &addr[vcpu->kvm_run->io.data_offset], sz);
+
+	if (offset > MEM_SIZE){
+		printf("got not safe offset - ignoring\n");
+		return NULL;
+	}
+	return &(vm->mem[offset]);
+}
+
+uintptr_t* _io_args_ptr(struct vm *vm, struct vcpu *vcpu, size_t sz) {
+	char* addr = (char *)vcpu->kvm_run;
+	uint64_t offset=0;
+	memcpy(&offset, &addr[vcpu->kvm_run->io.data_offset], sz);
+	return (uintptr_t*) &(vm->mem[offset]);
+}
+
+void print_str(struct vm *vm, struct vcpu *vcpu, size_t sz) {
+	char *output = _io_string(vm, vcpu, sz);
+	if (NULL == output) {
+		return;
+	}
+	printf("%s", output);
+}
+
+void file_open(struct vm *vm, struct vcpu *vcpu, size_t sz, int *file_fd) {
+	char *filename = _io_string(vm, vcpu, sz);
+	if (NULL == filename) {
+		return;
+	}
+	printf("###### GOT filename: %s\n", filename);
+
+	if (NULL != file_fd && -1 != *file_fd) {
+		return;
+	}
+	*file_fd = open(filename, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+	if (NULL == file_fd || -1 == *file_fd) {
+		perror("###### failed open file");
+	}
+	printf("###### FD open: %d\n", *file_fd);
+}
+
+void file_read(struct vm *vm, struct vcpu *vcpu, size_t sz, int *file_fd) {
+	uintptr_t* args = _io_args_ptr(vm, vcpu, sz);
+	char *buf = &(vm->mem[args[0]]);
+	int *len = (int *) &(vm->mem[args[1]]);
+
+	ssize_t ret = -1;
+	if (NULL == len) {
+		printf("###### failed loading len argument");
+		goto end;
+	}
+	if (NULL == file_fd || -1 == *file_fd) {
+		printf("###### no open fd\n");
+		goto end;
+	}
+
+	ret = read(*file_fd, buf, *len);
+	printf("###### Got read with len(%d) and ret(%ld)\n", *len, ret);
+end:
+	*len = ret;
+}
+
+void file_write(struct vm *vm, struct vcpu *vcpu, size_t sz, int *file_fd) {
+	uintptr_t* args = _io_args_ptr(vm, vcpu, sz);
+	char *buf = &(vm->mem[args[0]]);
+	int *len = (int *) &(vm->mem[args[1]]);
+
+	ssize_t ret = -1;
+	if (NULL == len) {
+		printf("###### failed loading len argument");
+		goto end;
+	}
+	if (NULL == file_fd || -1 == *file_fd) {
+		printf("###### no open fd\n");
+		goto end;
+	}
+
+	ret = write(*file_fd, buf, *len);
+	printf("###### Got write with len(%d) and ret(%ld)\n", *len, ret);
+end:
+	*len = ret;
+}
+
+void file_close(int *file_fd) {
+	if (NULL == file_fd || -1 == *file_fd) {
+		printf("###### no open fd\n");
+		return;
+	}
+	int ret = close(*file_fd);
+	if (-1 == ret) {
+		perror("###### failed close file");
+		return;
+	}
+	printf("###### Got close file\n");
+}
+
+void seek_start(int *file_fd) {
+	if (NULL == file_fd || -1 == *file_fd) {
+		printf("###### no open fd\n");
+		return;
+	}
+	if (-1 == lseek(*file_fd, 0, SEEK_SET)) {
+		printf("###### failed seek to end\n");
+		return;
+	}
+	printf("###### Got seek_start\n");
+}
+
 int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 {
 	struct kvm_regs regs;
 	uint64_t memval = 0;
 	uint32_t count=0;
+	int file_fd = -1;
 	for (;;) {
 		if (ioctl(vcpu->fd, KVM_RUN, 0) < 0) {
 			perror("KVM_RUN");
@@ -181,38 +311,49 @@ int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 			count++;
 			if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT
 			    && vcpu->kvm_run->io.port == 0xE9) {
-				char *p = (char *)vcpu->kvm_run;
-				printf("###### start output:\n");
-				fwrite(p + vcpu->kvm_run->io.data_offset,
-				       vcpu->kvm_run->io.size, 1, stdout);
-				fflush(stdout);
-				printf("###### end ouput\n");
+				print_char(vcpu);
 				continue;
 			}
 
-			// print
 			if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT
 			    && vcpu->kvm_run->io.port == 0xAA) {
-				char* addr = (char *)vcpu->kvm_run;
-				uint64_t offset=0;
-				memcpy(&offset, &addr[vcpu->kvm_run->io.data_offset], sz);
-
-				printf("###### offset passed was: %ld\n", offset);
-				if (offset > MEM_SIZE){
-					printf("got not safe offset - ignoring\n");
-					continue;
-				}
-				char *output = &(vm->mem[offset]);
-				printf("###### GOT output:\n%s", output);
+				print_str(vm, vcpu, sz);
 				continue;
 			}
 
-			// exit
 			if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_IN
 			    && vcpu->kvm_run->io.port == 0xBB) {
-				printf("###### exits, count value is: %d\n", count);
-				char* addr = (char *)vcpu->kvm_run;
-				memcpy(&addr[vcpu->kvm_run->io.data_offset], &count, sizeof(count));
+				exits(vcpu, &count);
+				continue;
+			}
+
+			if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT
+			    && vcpu->kvm_run->io.port == 0xCC) {
+				file_open(vm, vcpu, sz, &file_fd);
+				continue;
+			}
+
+			if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT
+			    && vcpu->kvm_run->io.port == 0xDD) {
+				file_read(vm, vcpu, sz, &file_fd);
+				continue;
+			}
+
+			if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT
+			    && vcpu->kvm_run->io.port == 0xEE) {
+				file_write(vm, vcpu, sz, &file_fd);
+				continue;
+			}
+
+			if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT
+			    && vcpu->kvm_run->io.port == 0xFF) {
+				file_close(&file_fd);
+				continue;
+			}
+
+			if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT
+			    && vcpu->kvm_run->io.port == 0x00) {
+				seek_start(&file_fd);
 				continue;
 			}
 
