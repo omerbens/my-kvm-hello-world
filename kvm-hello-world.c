@@ -137,24 +137,24 @@ struct vcpu {
 	struct kvm_run *kvm_run;
 };
 
-void vcpu_init(struct vm *vm, struct vcpu *vcpu)
+void vcpu_init(struct vm *vm, struct vcpu *vcpu, int cpu_id)
 {
 	int vcpu_mmap_size;
 
-	vcpu->fd = ioctl(vm->fd, KVM_CREATE_VCPU, 0);
+	vcpu->fd = ioctl(vm->fd, KVM_CREATE_VCPU, cpu_id);
         if (vcpu->fd < 0) {
 		perror("KVM_CREATE_VCPU");
                 exit(1);
 	}
 
-	vcpu_mmap_size = ioctl(vm->sys_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+	vcpu_mmap_size = ioctl(vm->sys_fd, KVM_GET_VCPU_MMAP_SIZE, cpu_id);
         if (vcpu_mmap_size <= 0) {
 		perror("KVM_GET_VCPU_MMAP_SIZE");
                 exit(1);
 	}
 
 	vcpu->kvm_run = mmap(NULL, vcpu_mmap_size, PROT_READ | PROT_WRITE,
-			     MAP_SHARED, vcpu->fd, 0);
+			     MAP_SHARED, vcpu->fd, cpu_id);
 	if (vcpu->kvm_run == MAP_FAILED) {
 		perror("mmap kvm_run");
 		exit(1);
@@ -622,7 +622,7 @@ int run_long_mode(struct vm *vm, struct vcpu *vcpu)
 int main(int argc, char **argv)
 {
 	struct vm vm;
-	struct vcpu vcpu;
+	struct vcpu vcpu0;//, vcpu1;
 	enum {
 		REAL_MODE,
 		PROTECTED_MODE,
@@ -657,20 +657,16 @@ int main(int argc, char **argv)
 	}
 
 	vm_init(&vm, MEM_SIZE);
-	vcpu_init(&vm, &vcpu);
+	vcpu_init(&vm, &vcpu0, 0);
+	// vcpu_init(&vm, &vcpu1, 1);
 
 	switch (mode) {
 	case REAL_MODE:
-		return !run_real_mode(&vm, &vcpu);
-
 	case PROTECTED_MODE:
-		return !run_protected_mode(&vm, &vcpu);
-
 	case PAGED_32BIT_MODE:
-		return !run_paged_32bit_mode(&vm, &vcpu);
-
+		return -1;
 	case LONG_MODE:
-		return !run_long_mode(&vm, &vcpu);
+		return !run_long_mode(&vm, &vcpu0);
 	}
 
 	return 1;
